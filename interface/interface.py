@@ -1,9 +1,13 @@
+import requests
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QPushButton, QListWidget, QVBoxLayout, QLabel, QWidget, QFileDialog, \
     QHBoxLayout, QMessageBox
 import sys
 import xmltodict as xml
 import pandas as pd
+import tempfile
+import os
+import webbrowser
 
 
 class AppXMLtoExcel(QWidget):
@@ -21,8 +25,11 @@ class AppXMLtoExcel(QWidget):
         self.btn_selecionar = QPushButton('Selecionar Arquivos XML')
         self.btn_selecionar.clicked.connect(self.adicionar_xml)
 
-        self.btn_converter = QPushButton('Converter Notas Fiscais')
+        self.btn_converter = QPushButton('Converter para Excel')
         self.btn_converter.clicked.connect(self.converter_notas)
+
+        self.btn_converter_pdf = QPushButton('Converter para PDF')
+        self.btn_converter_pdf.clicked.connect(self.converter_pdf)
 
         self.lst_xml = QListWidget()
 
@@ -35,6 +42,7 @@ class AppXMLtoExcel(QWidget):
 
         layout.addWidget(self.btn_selecionar)
         layout.addWidget(self.btn_converter)
+        layout.addWidget(self.btn_converter_pdf)
         layout.addWidget(self.lst_xml)
 
         self.setLayout(layout)
@@ -61,7 +69,7 @@ class AppXMLtoExcel(QWidget):
             self.pegar_infos(arquivo, valores)
 
         colunas = ['numeroNota', 'empresaEmissora', 'nomeCliente', 'logradouro', 'bairro', 'municipio', 'uf',
-                   'peso', 'valorNota', 'DtVencimento', 'valorICMS', 'valorImposto', 'valorDesconto', 'COFINS',
+                   'peso', 'valorNota', 'valorICMS', 'valorImposto', 'valorDesconto', 'COFINS',
                    'qntProd']
 
         tabela = pd.DataFrame(columns=colunas, data=valores)
@@ -70,8 +78,19 @@ class AppXMLtoExcel(QWidget):
         QMessageBox.information(self, "Conversão Concluída",
                                 "Notas fiscais convertidas com sucesso para 'NotasFiscais.xlsx'.")
 
+    def converter_pdf(self):
+        if not self.xml_files:
+            QMessageBox.warning(self, "Nenhum Arquivo Selecionado", "Nenhum arquivo foi selecionado.")
+            return
+
+        for arquivo in self.xml_files:
+            pdf_filename = self.converter_xml_para_pdf(arquivo)
+            if pdf_filename:
+                webbrowser.open(pdf_filename)
+
+
+
     def pegar_infos(self, nome_arquivo, valores):
-        print(f'Pegou as Infos de: {nome_arquivo}')
         with open(nome_arquivo, 'rb') as arquivo_xml:
             dic_arquivo = xml.parse(arquivo_xml)
             if 'NFe' in dic_arquivo:
@@ -88,8 +107,11 @@ class AppXMLtoExcel(QWidget):
             valorNota = infos_nf['total']['ICMSTot']['vBC']
             valorICMS = infos_nf['total']['ICMSTot']['vICMS']
             valorDesconto = infos_nf['total']['ICMSTot'].get('vDesc', '0.0')
-            valorImposto = infos_nf['total']['ICMSTot']['vTotTrib']
-            DtVencimento = infos_nf['cobr']['dup']['dVenc']
+
+            if 'vTotTrib' in infos_nf['total']:
+                valorImposto = infos_nf['total']['ICMSTot']['vTotTrib']
+            else:
+                valorImposto = '0.0'
 
             if 'COFINS' in infos_nf['det']:
                 COFINS = infos_nf['det']['imposto']['COFINS']['COFINSAliq']['vBC']
@@ -107,8 +129,36 @@ class AppXMLtoExcel(QWidget):
                 peso = 'Não Informado'
 
         valores.append([numeroNota, empresaEmissora, nomeCliente, logradouro, bairro, municipio, uf,
-                        peso, valorNota, DtVencimento, valorICMS, valorImposto, valorDesconto, COFINS, qntProd])
+                        peso, valorNota, valorICMS, valorImposto, valorDesconto, COFINS, qntProd])
 
+    def converter_xml_para_pdf(self, nome_arquivo):
+        try:
+            with open(nome_arquivo, 'rb') as xml_file:
+                # Use um arquivo temporário para salvar o PDF
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as pdf_temp_file:
+                    response = requests.post("https://www.fsist.com.br/converter-xml-nfe-para-danfe", files={'xml_file': (nome_arquivo, xml_file)})
+                    if response.status_code == 200:
+                        # Verifique se a resposta parece ser um PDF válido
+                        if response.headers.get('Content-Type', '').lower() == 'application/pdf':
+                            # Salve o conteúdo no arquivo temporário
+                            pdf_temp_file.write(response.content)
+                            pdf_temp_file.close()
+                            QMessageBox.information(self, "Conversão Concluída",
+                                                    "Notas fiscais convertidas com sucesso para PDF.")
+
+                            # Retorne o nome do arquivo PDF salvo
+                            return pdf_temp_file.name
+
+                        else:
+                            QMessageBox.warning(self, "Erro na Conversão",
+                                                "A conversão não gerou um PDF válido.")
+                    else:
+                        QMessageBox.warning(self, "Erro na Conversão",
+                                            f"O serviço retornou um status de erro: {response.status_code}")
+        except Exception as e:
+            QMessageBox.warning(self, "Erro na Conversão",
+                                f"Ocorreu um erro ao converter o XML para PDF: {str(e)}")
+        return None
 
 if __name__ == '__main__':
     app = QApplication()
